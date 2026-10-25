@@ -1,0 +1,601 @@
+# Ingeteam hybrid inverter via the native `modbus` integration.
+#
+# This file is a Home Assistant package. Load it by adding, in configuration.yaml:
+#
+#     homeassistant:
+#       packages: !include_dir_named packages
+#
+# The package name is the file name, so this file must live in the `packages/`
+# directory (for example packages/ingeteam_modbus.yaml).
+#
+# Register addresses are PDU addresses into the input-registers block that begins
+# at device register 30001 (PDU address 0) and is read with Modbus function 0x04.
+# All reads are input registers; this configuration never writes to the inverter.
+#
+# --- Request-rate budget (read this before changing any interval) -------------
+# The native integration issues ONE request per entity, so the steady-state
+# request rate is (entities / scan_interval). The custom component this replaces
+# read the whole 81-register block in a single request every 5 s. With the default
+# per-entity scan_interval of 15 s and 54 entities, this hub issued about
+# 3.6 requests/s (~18x the old component), which periodically overran the
+# inverter's Modbus TCP server: responses arrived with stale transaction ids,
+# pymodbus discarded them, retries were exhausted and the hub eventually closed
+# the connection.
+#
+# The entities are therefore tiered by how fast their value can meaningfully move:
+#   tier A  scan_interval 30 s    -> dynamic electrical values AND direction/status
+#                                    signals (a direction register that lags makes the
+#                                    dashboard look self-contradictory)
+#   tier B  scan_interval 300 s   -> slow alarm/enum registers
+#   tier C  scan_interval 1800 s  -> constants and absent hardware
+# Steady-state rate: 36/30 + 4/300 + 14/1800 ~= 1.22 requests/s, about a 66%
+# reduction. message_wait_milliseconds is raised 100 -> 250 so the device gets a
+# quiet gap between requests and a transient stall can no longer cascade into a
+# backlog. Do not shorten an interval without re-reading the request-rate budget
+# in README.md. The only verified figures are 3.6 requests/s (which failed) and
+# 1.22 requests/s (stable); ~1.5 requests/s is an untested guardrail, not a
+# measured ceiling.
+#
+# A later revision moved `status_raw`, `battery_status_raw`,
+# `ap_reduction_reason_raw` and `battery_discharge_limitation_reason_raw` from
+# tier B to tier A: at 300 s the battery-direction register lagged a median of
+# 337 s (max 1177 s), which made the battery appear to contradict its own
+# direction and degraded every consumer of that signal.
+
+modbus:
+  - type: tcp
+    name: ingeteam
+    host: !secret ingeteam_host
+    port: 502
+    timeout: 5
+    message_wait_milliseconds: 250
+    sensors:
+      - name: ingeteam Stop event code
+        unique_id: ingeteam_stop_code
+        address: 9
+        input_type: input
+        scan_interval: 300
+        data_type: uint16
+        scale: 1
+        precision: 0
+        state_class: measurement
+      - name: ingeteam Alarm code
+        unique_id: ingeteam_alarm_code
+        address: 10
+        input_type: input
+        scan_interval: 300
+        data_type: uint32
+        swap: word
+        scale: 1
+        precision: 0
+        state_class: measurement
+      - name: ingeteam Waiting Time to Connect to Grid
+        unique_id: ingeteam_waiting_time
+        address: 16
+        input_type: input
+        scan_interval: 300
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "s"
+        state_class: measurement
+      - name: ingeteam Battery Voltage
+        unique_id: ingeteam_battery_voltage
+        address: 17
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Battery Current
+        unique_id: ingeteam_battery_current
+        address: 18
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam Battery State of Charge
+        unique_id: ingeteam_battery_state_of_charge
+        address: 20
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+      - name: ingeteam Battery State of Health
+        unique_id: ingeteam_battery_state_of_health
+        address: 21
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "%"
+        state_class: measurement
+      - name: ingeteam Battery Charging Voltage
+        unique_id: ingeteam_battery_charging_voltage
+        address: 22
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Battery Discharging Voltage
+        unique_id: ingeteam_battery_discharging_voltage
+        address: 23
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Battery Max. Charging Current
+        unique_id: ingeteam_battery_charging_current_max
+        address: 24
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam Battery Max. Discharging Current
+        unique_id: ingeteam_battery_discharging_current_max
+        address: 25
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam Battery Temp
+        unique_id: ingeteam_battery_temp
+        address: 27
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+      - name: ingeteam Battery BMS Alarm
+        unique_id: ingeteam_battery_bms_alarm
+        address: 28
+        input_type: input
+        scan_interval: 300
+        data_type: uint16
+        scale: 1
+        precision: 0
+        state_class: measurement
+      - name: ingeteam Battery Voltage Internal Sensor
+        unique_id: ingeteam_battery_voltage_internal
+        address: 30
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam PV1 Voltage
+        unique_id: ingeteam_pv1_voltage
+        address: 31
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam PV1 Current
+        unique_id: ingeteam_pv1_current
+        address: 32
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam PV1 Power
+        unique_id: ingeteam_pv1_power
+        address: 33
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam PV2 Voltage
+        unique_id: ingeteam_pv2_voltage
+        address: 34
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam PV2 Current
+        unique_id: ingeteam_pv2_current
+        address: 35
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam PV2 Power
+        unique_id: ingeteam_pv2_power
+        address: 36
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam Active Power
+        unique_id: ingeteam_active_power
+        address: 37
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam Reactive Power
+        unique_id: ingeteam_reactive_power
+        address: 38
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam Power factor Cosφ
+        unique_id: ingeteam_power_factor
+        address: 39
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.001
+        precision: 2
+        state_class: measurement
+      - name: ingeteam Active Power Reduction Ratio
+        unique_id: ingeteam_ap_reduction_ratio
+        address: 40
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "%"
+        state_class: measurement
+      - name: ingeteam Reactive Power Set-Point Type
+        unique_id: ingeteam_reactive_setpoint_type
+        address: 42
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+        state_class: measurement
+      - name: ingeteam Critical Loads Voltage
+        unique_id: ingeteam_cl_voltage
+        address: 43
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Critical Loads Current
+        unique_id: ingeteam_cl_current
+        address: 44
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam Critical Loads Frequency
+        unique_id: ingeteam_cl_freq
+        address: 45
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "Hz"
+        device_class: frequency
+        state_class: measurement
+      - name: ingeteam Critical Loads Active Power
+        unique_id: ingeteam_cl_active_power
+        address: 46
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam Critical Loads Reactive Power
+        unique_id: ingeteam_cl_reactive_power
+        address: 47
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "var"
+        device_class: reactive_power
+        state_class: measurement
+      - name: ingeteam Internal Meter Voltage
+        unique_id: ingeteam_im_voltage
+        address: 48
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Internal Meter Current
+        unique_id: ingeteam_im_current
+        address: 49
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+      - name: ingeteam Internal Meter Frequency
+        unique_id: ingeteam_im_freq
+        address: 50
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "Hz"
+        device_class: frequency
+        state_class: measurement
+      - name: ingeteam Internal Active Power
+        unique_id: ingeteam_im_active_power
+        address: 51
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam Internal Reactive Power
+        unique_id: ingeteam_im_reactive_power
+        address: 52
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "var"
+        device_class: reactive_power
+        state_class: measurement
+      - name: ingeteam Internal Power Factor Cosφ
+        unique_id: ingeteam_im_power_factor
+        address: 53
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.001
+        precision: 2
+        state_class: measurement
+      - name: ingeteam DC Bus Voltage
+        unique_id: ingeteam_dc_bus_voltage
+        address: 54
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+      - name: ingeteam Temperature Module 1
+        unique_id: ingeteam_temp_mod_1
+        address: 55
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+      - name: ingeteam Temperature Module 2
+        unique_id: ingeteam_temp_mod_2
+        address: 56
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+      - name: ingeteam Internal Temperature
+        unique_id: ingeteam_temp_pcb
+        address: 57
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+      - name: ingeteam RMS Differential Current
+        unique_id: ingeteam_rms_diff_current
+        address: 61
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 0.1
+        precision: 2
+        unit_of_measurement: "mA"
+        state_class: measurement
+      - name: ingeteam Total Loads Power
+        unique_id: ingeteam_total_loads_power
+        address: 78
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam PV External Power
+        unique_id: ingeteam_external_pv_power
+        address: 79
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam EV Power
+        unique_id: ingeteam_ev_power
+        address: 80
+        input_type: input
+        scan_interval: 1800
+        data_type: int16
+        scale: 1
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+      - name: ingeteam status raw
+        unique_id: ingeteam_status_raw
+        address: 15
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam battery_status raw
+        unique_id: ingeteam_battery_status_raw
+        address: 26
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam ap_reduction_reason raw
+        unique_id: ingeteam_ap_reduction_reason_raw
+        address: 41
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam battery_discharge_limitation_reason raw
+        unique_id: ingeteam_battery_discharge_limitation_reason_raw
+        address: 29
+        input_type: input
+        scan_interval: 30
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam do_1_status raw
+        unique_id: ingeteam_do_1_status_raw
+        address: 62
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam do_2_status raw
+        unique_id: ingeteam_do_2_status_raw
+        address: 63
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam di_drm_status raw
+        unique_id: ingeteam_di_drm_status_raw
+        address: 64
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam di_2_status raw
+        unique_id: ingeteam_di_2_status_raw
+        address: 65
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam di_3_status raw
+        unique_id: ingeteam_di_3_status_raw
+        address: 66
+        input_type: input
+        scan_interval: 1800
+        data_type: uint16
+        scale: 1
+        precision: 0
+      - name: ingeteam battery_power raw
+        unique_id: ingeteam_battery_power_raw
+        address: 19
+        input_type: input
+        scan_interval: 30
+        data_type: int16
+        scale: 1
+        precision: 0

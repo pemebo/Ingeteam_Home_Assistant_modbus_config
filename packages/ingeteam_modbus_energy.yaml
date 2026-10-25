@@ -1,0 +1,73 @@
+# OPTIONAL package: grid import/export, battery power and PV power helpers.
+#
+# This file provides the grid import/export, battery power and PV power entities
+# that an Energy-dashboard setup typically uses. The core register sensors and
+# the text/status templates do not depend on this file.
+#
+# This file is a Home Assistant package and must be loaded as one, by adding
+# `packages: !include_dir_named packages` under the `homeassistant:` key in
+# configuration.yaml. Alternatively, paste the `- sensor:` block below into an
+# existing top-level `template:` key. Do not define the same entity twice: Home
+# Assistant merges list-based domains, and a duplicate entity id is suffixed `_2`
+# or ignored.
+
+template:
+  - sensor:
+      - name: "ingeteam_export_power"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% if states('sensor.ingeteam_internal_active_power') | int(0) >= 0 %}
+            {{ states('sensor.ingeteam_internal_active_power') | int(0) }}
+          {% else %}
+            0
+          {% endif %}
+
+      - name: "ingeteam_import_power"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% if states('sensor.ingeteam_internal_active_power') | int(0) < 0 %}
+            {{ states('sensor.ingeteam_internal_active_power') | int(0) | abs }}
+          {% else %}
+            0
+          {% endif %}
+
+      - name: "ingeteam_battery_power"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+            {{ (states('sensor.ingeteam_battery_discharging_power')|float(0) - states('sensor.ingeteam_battery_charging_power')|float(0))|round(0) }}
+
+      # `ingeteam_pv_power` is derived from the energy balance, as it originally was.
+      # The identity that holds in EVERY regime is
+      #     pv + import - export  ==  consumption + (charging - discharging)
+      # hence  pv = consumption + (export - import) + charging - discharging
+      # and, because the device guarantees active_power = critical_loads + internal_active_power,
+      # this is algebraically identical to the original `active_power + charging - discharging`.
+      # `internal_active_power` is the SIGNED grid meter (positive = export, negative = import)
+      # and already equals (export - import), so no max()/abs() is needed on it.
+      # NOTE: the simplified rule "charging = pv + import - consumption" only holds while
+      # nothing is exported. The form that holds always is
+      #     charging - discharging = pv + import - export - consumption.
+      # TRADE-OFF, deliberate: this is a DERIVED value, not a measurement. It absorbs the
+      # residual that the Modbus map does not expose. The offset is regime-dependent: the
+      # derived value sits above the measured total while discharging and below it while
+      # charging, and the ~125 W figure is the magnitude in the discharging regime.
+      # Internal consistency of the displayed balance was chosen over measurement fidelity;
+      # `sensor.ingeteam_pv_total_power` still holds the measured sum, so point the display
+      # at that entity if the measurement is wanted instead.
+      # entity_id is unchanged, so dashboards, the Energy helper and statistics continuity survive.
+      - name: "ingeteam_pv_power"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [0,
+              (states('sensor.ingeteam_critical_loads_active_power') | int(0))
+              + (states('sensor.ingeteam_internal_active_power') | int(0))
+              + (states('sensor.ingeteam_battery_charging_power') | int(0))
+              - (states('sensor.ingeteam_battery_discharging_power') | int(0))] | max }}

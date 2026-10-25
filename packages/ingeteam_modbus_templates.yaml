@@ -1,0 +1,90 @@
+# Derived Ingeteam sensors (text/status enums and balance-derived power).
+#
+# This file is a Home Assistant package and must be loaded as one, by adding
+# `packages: !include_dir_named packages` under the `homeassistant:` key in
+# configuration.yaml. Alternatively, paste the `- sensor:` block below into an
+# existing top-level `template:` key. Do not define the same entity twice: Home
+# Assistant merges list-based domains, and a duplicate hub name or entity id is
+# suffixed `_2` or ignored.
+#
+# The enum-to-text maps are transcribed from the notes of Ingeteam's published
+# Modbus input-register documentation (see docs/registers.md for the source and
+# the register reference).
+
+template:
+  - sensor:
+      - name: ingeteam Status
+        unique_id: ingeteam_status
+        availability: "{{ states('sensor.ingeteam_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Inverter Stopped', '1': 'Starting', '2': 'Off-grid', '3': 'On-grid', '4': 'On-grid (Standby Battery)', '5': 'Waiting to connect to Grid', '6': 'Critical Loads Bypassed to Grid', '7': 'Emergency Charge from PV', '8': 'Emergency Charge from Grid', '9': 'Inverter Locked waiting for Reset', '10': 'Error Mode'}.get(states('sensor.ingeteam_status_raw'), 'Unknown (' ~ states('sensor.ingeteam_status_raw') ~ ')') }}"
+
+      - name: ingeteam Battery Status
+        unique_id: ingeteam_battery_status
+        availability: "{{ states('sensor.ingeteam_battery_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Standby', '1': 'Discharging', '2': 'Constant Current Charging', '3': 'Constant Voltage Charging', '4': 'Floating', '5': 'Equalizing', '6': 'Error Communication with BMS', '7': 'No Configured', '8': 'Capacity Calibration (Step 1)', '9': 'Capacity Calibration (Step 2)', '10': 'Standby Manual'}.get(states('sensor.ingeteam_battery_status_raw'), 'Unknown (' ~ states('sensor.ingeteam_battery_status_raw') ~ ')') }}"
+
+      - name: ingeteam Active Power Reduction Reason
+        unique_id: ingeteam_ap_reduction_reason
+        availability: "{{ states('sensor.ingeteam_ap_reduction_reason_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'No limitation', '1': 'Communication', '2': 'PCB Temperature', '3': 'Heat Sink Temperature', '4': 'Pac vs Fac Algorithm', '5': 'Soft Start', '6': 'Charge Power Configured', '7': 'PV Surplus injected to the Loads', '8': 'Pac vs Vac Algorithm', '9': 'Battery Power Limited', '10': 'AC Grid Power Limited', '11': 'Self-Consumption Mode', '12': 'High Bus Voltage Protection', '13': 'LVRT or HVRT Process', '14': 'Nominal AC Current', '15': 'Grid Consumption Protection', '16': 'PV Surplus Injected to the Grid'}.get(states('sensor.ingeteam_ap_reduction_reason_raw'), 'Unknown (' ~ states('sensor.ingeteam_ap_reduction_reason_raw') ~ ')') }}"
+
+      - name: ingeteam Battery Discharge Limitation Reason
+        unique_id: ingeteam_battery_discharge_limitation_reason
+        availability: "{{ states('sensor.ingeteam_battery_discharge_limitation_reason_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'No limitation', '1': 'Heat Sink Temperature', '2': 'PT100 Temperature', '3': 'Low Bus Voltage Protection', '4': 'Battery Settings', '5': 'BMS Communication', '6': 'SOC Max Configured', '7': 'SOC Min Configured', '8': 'Maximum Battery Power', '9': 'Modbus command', '10': 'Digital Input 2', '11': 'Digital Input 3', '12': 'PV Charging scheduling', '13': 'EMS Strategy'}.get(states('sensor.ingeteam_battery_discharge_limitation_reason_raw'), 'Unknown (' ~ states('sensor.ingeteam_battery_discharge_limitation_reason_raw') ~ ')') }}"
+
+      - name: ingeteam Digital Output 1. Status
+        unique_id: ingeteam_do_1_status
+        availability: "{{ states('sensor.ingeteam_do_1_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Off', '1': 'On'}.get(states('sensor.ingeteam_do_1_status_raw'), 'Unknown') }}"
+
+      - name: ingeteam Digital Output 2. Status
+        unique_id: ingeteam_do_2_status
+        availability: "{{ states('sensor.ingeteam_do_2_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Off', '1': 'On'}.get(states('sensor.ingeteam_do_2_status_raw'), 'Unknown') }}"
+
+      - name: ingeteam Digital Input DRM0 Status
+        unique_id: ingeteam_di_drm_status
+        availability: "{{ states('sensor.ingeteam_di_drm_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Off', '1': 'On'}.get(states('sensor.ingeteam_di_drm_status_raw'), 'Unknown') }}"
+
+      - name: ingeteam Digital Input 2. Status
+        unique_id: ingeteam_di_2_status
+        availability: "{{ states('sensor.ingeteam_di_2_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Off', '1': 'On'}.get(states('sensor.ingeteam_di_2_status_raw'), 'Unknown') }}"
+
+      - name: ingeteam Digital Input 3. Status
+        unique_id: ingeteam_di_3_status
+        availability: "{{ states('sensor.ingeteam_di_3_status_raw') not in ['unknown', 'unavailable', 'none'] }}"
+        state: "{{ {'0': 'Off', '1': 'On'}.get(states('sensor.ingeteam_di_3_status_raw'), 'Unknown') }}"
+
+      - name: ingeteam Battery Charging Power
+        unique_id: ingeteam_battery_charging_power
+        state: "{{ [0, 0 - (states('sensor.ingeteam_battery_power_raw') | int(0))] | max }}"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-charging-100
+
+      - name: ingeteam Battery Discharging Power
+        unique_id: ingeteam_battery_discharging_power
+        state: "{{ [0, (states('sensor.ingeteam_battery_power_raw') | int(0))] | max }}"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-charging-100
+
+      - name: ingeteam PV Internal Total Power
+        unique_id: ingeteam_pv_internal_total_power
+        state: "{{ (states('sensor.ingeteam_pv1_power') | int(0)) + (states('sensor.ingeteam_pv2_power') | int(0)) }}"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+
+      - name: ingeteam PV Total Power
+        unique_id: ingeteam_pv_total_power
+        state: "{{ (states('sensor.ingeteam_pv_internal_total_power') | int(0)) + (states('sensor.ingeteam_pv_external_power') | int(0)) }}"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+
